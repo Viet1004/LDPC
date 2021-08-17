@@ -1,156 +1,170 @@
-use std::borrow::Borrow;
-use std::cell::RefCell;
-use std::collections::HashMap;
+extern crate rand;
+extern crate sprs;
+use rand::{seq::SliceRandom, SeedableRng};
+use rand::thread_rng;
+use rand::Rng;
+use rand_chacha::ChaChaRng;
+//use std::borrow::Borrow;
+//use std::cell::RefCell;
+//use std::collections::HashMap;
+use std::convert::TryInto;
+//use ndarray::Array1;
+//use ndarray::Array2;
 
-use ndarray::Array1;
-use ndarray::Array2;
-
-pub enum SuccessOrFail {
-    Success(Vec<i8>),
-    Fail(bool),
-}
-
-struct Data {
-    neighbor_col: Vec<(usize, usize)>,
-    neighbor_row: Vec<(usize, usize)>,
-    q_0: f32,
-    q_1: f32,
-    r_0: f32,
-    r_1: f32,
-}
+use sprs::{CsMat,CsVec};
 
 // TODO: seed is unused
-fn make_matrix(w_c: u32, w_r: u32, n: u32, seed: i8) {
+
+fn BSC_channel(n:usize ,code: &mut Vec<usize>, proba: f64) ->(CsVec<usize>, Vec<f64>){
+    let mut rng = rand::thread_rng();
+    let mut received: Vec<usize> = Vec::new();
+    let mut post_proba : Vec<f64> = Vec::new();
+    for _i in 0..code.len(){
+        if rng.gen::<f64>() < proba{
+            code[_i] ^= 1;
+        }
+        if code[_i] == 1{
+            received.push(_i);
+            post_proba.push(proba);
+        }else{post_proba.push(1.0-proba);}
+    } 
+    let data = vec![1;received.len()];
+    (CsVec::new(n,received,data),post_proba)
+}
+
+fn make_matrix_regularLDPC(w_c: usize, w_r: usize, n: usize, seed: u8) -> CsMat<usize> {
     if (n * w_c) % w_r != 0 {
         panic!("number of col * weight of col must be divisible by weight of row");
     }
 
     // TODO: what is this used for ?
-    let num_row: u32 = n * w_c / w_r;
+    let num_row: usize = n * w_c / w_r as usize;
+    let mut indices: Vec<usize> = (0..n).collect();
+    let mut indptr : Vec<usize> = vec![0;num_row+1 as usize];
+    let data: Vec<usize> = vec![0;(n*w_c as usize).try_into().unwrap()];
+    let indices_copy: Vec<usize> = indices.clone();
+    for i in 0..(num_row+1){
+        indptr[i as usize] = i*w_r as usize;
+    }
+    for i in 0..(w_c-1){
+        let mut temp = indices_copy.clone();
+//        temp.shuffle(&mut thread_rng());
+        let seed_list = [seed * i as u8; 32];
+        let mut rng = ChaChaRng::from_seed(seed_list);
+        temp.shuffle(&mut rng);
+        indices.append(&mut temp);
+    }    
+    CsMat::new_csc((num_row,n),
+                    indptr,
+                    indices,
+                    data)
+
 }
 
-pub fn run(m: usize, n: usize, matrix: Vec<Vec<i8>>, proba: Vec<(f32, f32)>, check: Vec<i8>,
-           number_of_iter: usize) -> SuccessOrFail {
-    let mut result: Vec<i8> = vec![0; n];
-    let mut dict: HashMap<(usize, usize), RefCell<Data>> = HashMap::new();
-    for i in 0..m {
-        for j in 0..n {
-            if matrix[i][j] == 1 {
-                let mut neighbor_c: Vec<(usize, usize)> = Vec::new();
-                let mut neighbor_r: Vec<(usize, usize)> = Vec::new();
-                for k in 0..n {
-                    if matrix[i][k] == 1 && k != j {
-                        neighbor_r.push((i, k));
-                    }
-                }
-                for k in 0..m {
-                    if matrix[k][j] == 1 && k != i {
-                        neighbor_c.push((k, j))
-                    }
-                }
-                let (mut q_0, mut q_1) = proba[j];
-                let (mut r_0, mut r_1) = (1.0, 1.0);
-                let data = Data {
-                    neighbor_col: neighbor_c,
-                    neighbor_row: neighbor_r,
-                    q_0,
-                    q_1,
-                    r_0,
-                    r_1,
-                };
-                dict.insert((i, j), RefCell::new(data));
-            }
-        }
+fn input_regularLDPC(m:usize, n:usize,matrix: &CsMat<usize>, post_proba: &Vec<f64>) -> CsMat<f64>{
+//    let (indptr, indices, _) = matrix.into_raw_storage();
+    let nnz = matrix.nnz();
+    let mut indptr_clone: Vec<usize> = vec![0;m+1];    // Need to check it if there is a logic error
+    for index in 0..n{
+        indptr_clone[index] = matrix.indptr().outer_inds_sz(index).start;
+    }    
+    indptr_clone[n] = nnz;
+    let mut indices: Vec<usize> = Vec::new();
+    for index in matrix.indices(){
+        indices.push(*index);
     }
+    let mut data = Vec::new();
+    for _i in matrix.indices().iter(){
+        let temp = post_proba[*_i]/(1.0-post_proba[*_i]);
+        data.push(temp.ln());
+    }
+    CsMat::new((m,n),
+                indptr_clone,
+                indices,
+                data)
+} 
 
-    for _ in 0..number_of_iter {
-        horizontal_run(&mut dict);
-        vertical_run(&mut dict, &proba, &mut result);
-        match verification(&matrix, &result, &check) {
-            true => {
-                return SuccessOrFail::Success(result);
-            }
-            false => {
-                continue;
-            }
+pub fn MessagePassing(matrix: &mut CsMat<usize>,syndrome: CsVec<usize>,post_proba:Vec<f64>,number_of_iter: usize ) 
+                -> Option<CsVec<usize>> {
+    let (m,n) = matrix.shape();
+    let mut success = false;
+    let mut matrix_input = input_regularLDPC(m, n, matrix, &post_proba);
+    let mut syndrome_vec : Vec<usize> = vec![0;m];
+    for i in syndrome.indices(){
+        syndrome_vec[*i] = 1;
+    }
+    for _i in 0..number_of_iter{
+        horizontal_run(&mut matrix_input, &syndrome_vec);
+        let code_word = vertical_run(&mut matrix_input, &post_proba, n, m);
+        success = verification(matrix, &code_word, &syndrome);
+        match success{
+            true => return Some(code_word),
+            false => continue
         }
     }
-    SuccessOrFail::Fail(false)
+    return None;
 }
 
-fn horizontal_run(dict: &mut HashMap<(usize, usize), RefCell<Data>>) {
-    for (l, r) in dict.keys() {
-        let mut mul = 1.0f32;
-        let mut value = match dict.get(&(*l, *r)) {
-            None => {
-                // TODO: are we sure we want to crash the program if that happens ? Should there be a more detailed error message ?
-                panic!("there is no value associated with key!!!")
+fn horizontal_run(matrix: &mut CsMat<f64>, syndrome: &Vec<usize>) {
+    let (m,_) = matrix.shape();  
+    let nnz = matrix.nnz();
+    let mut indptr_clone: Vec<usize> = vec![0;m+1];
+    for index in 0..m{
+        indptr_clone[index] = matrix.indptr().outer_inds_sz(index).start;
+    }    
+    indptr_clone[m] = nnz;
+    let data = matrix.data_mut();
+    for index in 0..m{
+        let temp: f64 = data[indptr_clone[index]..indptr_clone[index+1]].iter().product();
+        for _i in indptr_clone[index]..indptr_clone[index+1]{
+            let mut temp1 : f64 = 0.0;        
+            if syndrome[index] == 1{
+                temp1 = temp/data[_i];
+            }else{
+                temp1 = -temp/data[_i];
             }
-            Some(v) => v
-        };
-
-        for (nl, nr) in &value.borrow().neighbor_row {
-            // TODO: are we sure we want to unwrap here ? Eg crash if even one get fails ?
-            mul *= dict.get(&(*nl, *nr)).unwrap().borrow().q_0 - dict.get(&(*nl, *nr)).unwrap().borrow().q_1;
-        }
-
-        { value.borrow_mut().r_0 = (1.0 + mul) / 2.0; }
-        value.borrow_mut().r_0 = (1.0 - mul) / 2.0;
-    }
-}
-
-fn vertical_run(dict: &mut HashMap<(usize, usize), RefCell<Data>>, proba: &Vec<(f32, f32)>, string: &mut Vec<i8>) {
-    for (l, r) in dict.keys() {
-        let mut q0: f32 = proba[*r].0;
-        let mut q1: f32 = proba[*r].1;
-        // TODO: check if entry is present
-        for neighborC in &dict.get(&(*l, *r)).unwrap().borrow().neighbor_col {
-            q0 *= dict.get(&neighborC).unwrap().borrow_mut().r_0;
-            q1 *= dict.get(&neighborC).unwrap().borrow_mut().r_1;
-        }
-        let sum = q0 + q1;
-        q0 = q0 / sum;
-        q1 = q1 / sum;
-        let temp = match dict.get(&(*l, *r)) {
-            Some(val) => val,
-            None => panic!("Cannot find value associated with key line 106 "),
-        };
-
-        { temp.borrow_mut().q_0 = q0; }
-        { temp.borrow_mut().q_1 = q1; }
-
-        q0 = q0 * ((*dict).get(&(*l, *r)).unwrap().borrow().q_0);
-        q1 = q1 * ((*dict).get(&(*l, *r)).unwrap().borrow().q_1);
-        if q1 >= q0 {
-            string[*r] = 1;
-        } else {
-            string[*r] = 0;
+            let temp2 = (1.0+temp1)/(1.0-temp1);
+            data[_i] = temp2.ln();
         }
     }
 }
 
-fn verification(matrix: &Vec<Vec<i8>>, string: &Vec<i8>, check: &Vec<i8>) -> bool {
+fn vertical_run(matrix: &mut CsMat<f64>, post_proba: &Vec<f64>, n: usize,m:usize) -> CsVec<usize>{
+    let mut indices = Vec::new();
+
+    let mut matrix_temp = matrix.to_csc();
+    let nnz = matrix.nnz();
+    let mut indptr_clone: Vec<usize> = vec![0;m+1];
+    for index in 0..n{
+        indptr_clone[index] = matrix_temp.indptr().outer_inds_sz(index).start;
+    }    
+    indptr_clone[n] = nnz;
+    let data = matrix_temp.data_mut();
+    for index in 0..n{
+        let mut temp: f64 = data[indptr_clone[index]..indptr_clone[index+1]].iter().sum();
+        temp += post_proba[index];
+        for _i in indptr_clone[index]..indptr_clone[index+1]{        
+            data[_i] = temp - data[_i]
+        }
+        if temp <= 0.0{
+            indices.push(index);
+        }
+    }
+    let data_vec = vec![1;indices.len()];
+    let matrix_temp = matrix_temp.to_csr();
+    let data = matrix.data_mut();
+    for datum_ind in 0..nnz{
+        data[datum_ind] = matrix_temp.data()[datum_ind];
+    }
+    CsVec::new(n, indices,data_vec)
+}
+
+fn verification(matrix0: &CsMat<usize>, code_word: &CsVec<usize>, syndrome: &CsVec<usize>) -> bool {
     // Maybe there's a better way to do this, but here's what I used:
     // https://stackoverflow.com/questions/66925648/how-do-i-create-a-two-dimensional-array-from-a-vector-of-vectors-with-ndarray
-    let mut data = Vec::new();
-    let ncols = matrix.first().map_or(0, |row| row.len());
-    let mut nrows = 0;
-    for i in 0..matrix.len() {
-        data.extend_from_slice(matrix[i].as_slice());
-        nrows += 1;
-    }
-
-    let matrix = Array2::from_shape_vec((nrows, ncols), data.iter().map(|e| *e).collect()).unwrap();
-
-    // TODO: I'm not sure about this (the fact that it is called string makes me doubtful)
-    let string = Array1::from_vec(string.to_vec());
-    let check = Array1::from_vec(check.to_vec());
-
-    let res: Array1<i8> = matrix.dot(&string);
-    for i in 0..res.len() {
-        if res[i] != check[i] { return false; } else { continue; }
-    }
-    true
+    if matrix0 * code_word == *syndrome{
+        true
+    }else{false}
 }
 //#[cfg(test)]
 //mod tests{
@@ -160,3 +174,28 @@ fn verification(matrix: &Vec<Vec<i8>>, string: &Vec<i8>, check: &Vec<i8>) -> boo
 //        assert_eq!(vec![vec![0,1]], horizontal_run());
 //    }
 //}
+
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+    #[test]
+    fn demo() {
+//        println!("This is inside a test");
+        let n = 1000000;
+        let w_c = 4;
+        let w_r = 8;
+        let crossover_proba = 0.02;
+        let seed =10;
+        let mut original_code_word : Vec<usize> = vec![0;n];
+        let mut matrix = make_matrix_regularLDPC(w_c, w_r, n, seed);
+        let (received, post_proba) = BSC_channel(n, &mut original_code_word, crossover_proba);
+        let syndrome = &matrix * &received;
+        match MessagePassing(&mut matrix, syndrome, post_proba, 60){
+            Some(_value) => {
+                assert_eq!(2,2);
+            }
+            None => assert_eq!(2,3)
+        }
+    }
+}
