@@ -2,7 +2,7 @@ mod data_processing;
 use sprs::CsVec;
 
 fn main() {
-   let n = 1000;
+   let n = 100000;
    let w_c = 3;
    let w_r = 4;
    let crossover_proba = 0.02;
@@ -17,7 +17,10 @@ fn main() {
 //                     vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
 //   println!("Hello!");
    let mut matrix = data_processing::make_matrix_regular_ldpc(w_c, w_r, n, seed);
+//   println!("matrix indice: {:?}", matrix);
    let syndrome = &matrix * &sparse_vec;
+//   println!("syndrome: {:?}",syndrome.indices());
+//   println!("received: {:?}", received);
    match data_processing::message_passing(&mut matrix, syndrome, post_proba, 60){
       Some(value) => {
          println!("That is great but not quite!");

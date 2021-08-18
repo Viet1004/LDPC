@@ -99,6 +99,7 @@ pub fn message_passing(matrix: &mut CsMat<usize>,syndrome: CsVec<usize>,post_pro
     let mut syndrome_vec : Vec<usize> = vec![0;m];
     for i in syndrome.indices(){
         syndrome_vec[*i] = 1;
+        println!("i is {}", *i);
     }
     for _i in 0..number_of_iter{
         horizontal_run(&mut matrix_input, &syndrome_vec);
@@ -125,22 +126,20 @@ fn horizontal_run(matrix: &mut CsMat<f64>, syndrome: &Vec<usize>) {
     for index in 0..nnz{
         data[index] = (data[index]/2.0).tanh();
     }
-
-
     for index in 0..m{
         let temp: f64 = data[indptr_clone[index]..indptr_clone[index+1]].iter().product();
         for _i in indptr_clone[index]..indptr_clone[index+1]{
             let mut temp1 : f64 = 0.0;        
             if syndrome[index] == 1{
-                temp1 = temp/data[_i];
-            }else{
                 temp1 = -temp/data[_i];
+            }else{
+                temp1 = temp/data[_i];
             }
             let temp2 = (1.0+temp1)/(1.0-temp1);
             data[_i] = temp2.ln();
         }
     }
-//    println!("Horizontal run: {:?}", data);
+//    println!("After Horizontal run: {:?}", data);
 }
 
 fn vertical_run(matrix: &mut CsMat<f64>, post_proba: &Vec<f64>, n: usize,m:usize) -> CsVec<usize>{
