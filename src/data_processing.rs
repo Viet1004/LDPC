@@ -7,7 +7,7 @@ use rand_chacha::ChaChaRng;
 //use std::borrow::Borrow;
 //use std::cell::RefCell;
 //use std::collections::HashMap;
-use std::convert::TryInto;
+//use std::convert::TryInto;
 //use ndarray::Array1;
 //use ndarray::Array2;
 
@@ -15,15 +15,16 @@ use sprs::{CsMat,CsVec};
 
 // TODO: seed is unused
 
-fn BSC_channel(n:usize ,code: &mut Vec<usize>, proba: f64) ->(CsVec<usize>, Vec<f64>){
+pub fn bsc_channel(n:usize ,code: &Vec<usize>, proba: f64) ->(CsVec<usize>, Vec<f64>){
     let mut rng = rand::thread_rng();
     let mut received: Vec<usize> = Vec::new();
     let mut post_proba : Vec<f64> = Vec::new();
+    let mut code_clone = code.clone();
     for _i in 0..code.len(){
         if rng.gen::<f64>() < proba{
-            code[_i] ^= 1;
+            code_clone[_i] ^= 1;
         }
-        if code[_i] == 1{
+        if code_clone[_i] == 1{
             received.push(_i);
             post_proba.push(proba);
         }else{post_proba.push(1.0-proba);}
@@ -32,7 +33,8 @@ fn BSC_channel(n:usize ,code: &mut Vec<usize>, proba: f64) ->(CsVec<usize>, Vec<
     (CsVec::new(n,received,data),post_proba)
 }
 
-fn make_matrix_regularLDPC(w_c: usize, w_r: usize, n: usize, seed: u8) -> CsMat<usize> {
+
+pub fn make_matrix_regular_ldpc(w_c: usize, w_r: usize, n: usize, seed: u8) -> CsMat<usize> {
     if (n * w_c) % w_r != 0 {
         panic!("number of col * weight of col must be divisible by weight of row");
     }
@@ -40,11 +42,11 @@ fn make_matrix_regularLDPC(w_c: usize, w_r: usize, n: usize, seed: u8) -> CsMat<
     // TODO: what is this used for ?
     let num_row: usize = n * w_c / w_r as usize;
     let mut indices: Vec<usize> = (0..n).collect();
-    let mut indptr : Vec<usize> = vec![0;num_row+1 as usize];
-    let data: Vec<usize> = vec![0;(n*w_c as usize).try_into().unwrap()];
+    let mut indptr : Vec<usize> = vec![0;num_row+1];
+    let data: Vec<usize> = vec![1;n*w_c];
     let indices_copy: Vec<usize> = indices.clone();
     for i in 0..(num_row+1){
-        indptr[i as usize] = i*w_r as usize;
+        indptr[i as usize] = i*w_r;
     }
     for i in 0..(w_c-1){
         let mut temp = indices_copy.clone();
@@ -52,23 +54,27 @@ fn make_matrix_regularLDPC(w_c: usize, w_r: usize, n: usize, seed: u8) -> CsMat<
         let seed_list = [seed * i as u8; 32];
         let mut rng = ChaChaRng::from_seed(seed_list);
         temp.shuffle(&mut rng);
+        for j in 0..(n/w_r){
+            &temp[j*w_r..(j+1)*w_r].sort_unstable();
+            
+        }
         indices.append(&mut temp);
     }    
-    CsMat::new_csc((num_row,n),
+    CsMat::new((num_row,n),
                     indptr,
                     indices,
                     data)
-
 }
 
-fn input_regularLDPC(m:usize, n:usize,matrix: &CsMat<usize>, post_proba: &Vec<f64>) -> CsMat<f64>{
+fn input_regular_ldpc(m:usize, n:usize,matrix: &CsMat<usize>, post_proba: &Vec<f64>) -> CsMat<f64>{
 //    let (indptr, indices, _) = matrix.into_raw_storage();
     let nnz = matrix.nnz();
     let mut indptr_clone: Vec<usize> = vec![0;m+1];    // Need to check it if there is a logic error
-    for index in 0..n{
+    for index in 0..m{
         indptr_clone[index] = matrix.indptr().outer_inds_sz(index).start;
-    }    
-    indptr_clone[n] = nnz;
+    }
+//    println!("{:?}",indptr_clone);    
+    indptr_clone[m] = nnz;
     let mut indices: Vec<usize> = Vec::new();
     for index in matrix.indices(){
         indices.push(*index);
@@ -78,17 +84,18 @@ fn input_regularLDPC(m:usize, n:usize,matrix: &CsMat<usize>, post_proba: &Vec<f6
         let temp = post_proba[*_i]/(1.0-post_proba[*_i]);
         data.push(temp.ln());
     }
+//    println!("indptr_clone{:?}", indptr_clone);
     CsMat::new((m,n),
                 indptr_clone,
                 indices,
                 data)
 } 
 
-pub fn MessagePassing(matrix: &mut CsMat<usize>,syndrome: CsVec<usize>,post_proba:Vec<f64>,number_of_iter: usize ) 
+pub fn message_passing(matrix: &mut CsMat<usize>,syndrome: CsVec<usize>,post_proba:Vec<f64>,number_of_iter: usize ) 
                 -> Option<CsVec<usize>> {
     let (m,n) = matrix.shape();
     let mut success = false;
-    let mut matrix_input = input_regularLDPC(m, n, matrix, &post_proba);
+    let mut matrix_input = input_regular_ldpc(m, n, matrix, &post_proba);
     let mut syndrome_vec : Vec<usize> = vec![0;m];
     for i in syndrome.indices(){
         syndrome_vec[*i] = 1;
@@ -114,6 +121,12 @@ fn horizontal_run(matrix: &mut CsMat<f64>, syndrome: &Vec<usize>) {
     }    
     indptr_clone[m] = nnz;
     let data = matrix.data_mut();
+//    println!("Before horizontal run: {:?}", data);
+    for index in 0..nnz{
+        data[index] = (data[index]/2.0).tanh();
+    }
+
+
     for index in 0..m{
         let temp: f64 = data[indptr_clone[index]..indptr_clone[index+1]].iter().product();
         for _i in indptr_clone[index]..indptr_clone[index+1]{
@@ -127,6 +140,7 @@ fn horizontal_run(matrix: &mut CsMat<f64>, syndrome: &Vec<usize>) {
             data[_i] = temp2.ln();
         }
     }
+//    println!("Horizontal run: {:?}", data);
 }
 
 fn vertical_run(matrix: &mut CsMat<f64>, post_proba: &Vec<f64>, n: usize,m:usize) -> CsVec<usize>{
@@ -134,12 +148,13 @@ fn vertical_run(matrix: &mut CsMat<f64>, post_proba: &Vec<f64>, n: usize,m:usize
 
     let mut matrix_temp = matrix.to_csc();
     let nnz = matrix.nnz();
-    let mut indptr_clone: Vec<usize> = vec![0;m+1];
+    let mut indptr_clone: Vec<usize> = vec![0;n+1];
     for index in 0..n{
         indptr_clone[index] = matrix_temp.indptr().outer_inds_sz(index).start;
     }    
     indptr_clone[n] = nnz;
     let data = matrix_temp.data_mut();
+//    println!("Data before vertical run: {:?}", data);
     for index in 0..n{
         let mut temp: f64 = data[indptr_clone[index]..indptr_clone[index+1]].iter().sum();
         temp += post_proba[index];
@@ -156,6 +171,7 @@ fn vertical_run(matrix: &mut CsMat<f64>, post_proba: &Vec<f64>, n: usize,m:usize
     for datum_ind in 0..nnz{
         data[datum_ind] = matrix_temp.data()[datum_ind];
     }
+//    println!("data after vertical run:{:?}", data);
     CsVec::new(n, indices,data_vec)
 }
 
@@ -179,23 +195,22 @@ fn verification(matrix0: &CsMat<usize>, code_word: &CsVec<usize>, syndrome: &CsV
 #[cfg(test)]
 mod tests{
     use super::*;
-    #[test]
-    fn demo() {
-//        println!("This is inside a test");
-        let n = 1000000;
-        let w_c = 4;
-        let w_r = 8;
-        let crossover_proba = 0.02;
-        let seed =10;
-        let mut original_code_word : Vec<usize> = vec![0;n];
-        let mut matrix = make_matrix_regularLDPC(w_c, w_r, n, seed);
-        let (received, post_proba) = BSC_channel(n, &mut original_code_word, crossover_proba);
-        let syndrome = &matrix * &received;
-        match MessagePassing(&mut matrix, syndrome, post_proba, 60){
-            Some(_value) => {
-                assert_eq!(2,2);
-            }
-            None => assert_eq!(2,3)
-        }
-    }
+//    #[test]
+//    fn demo() {
+//        let n = 1000000;
+//        let w_c = 4;
+//        let w_r = 8;
+//        let crossover_proba = 0.02;
+//        let seed =10;
+//        let mut original_code_word : Vec<usize> = vec![0;n];
+//        let mut matrix = make_matrix_regular_ldpc(w_c, w_r, n, seed);
+//        let (received, post_proba) = bsc_channel(n, &mut original_code_word, crossover_proba);
+//        let syndrome = &matrix * &received;
+//        match message_passing(&mut matrix, syndrome, post_proba, 60){
+//            Some(_value) => {
+//                assert_eq!(2,2);
+//            }
+//            None => assert_eq!(2,3)
+//        }
+//    }
 }
