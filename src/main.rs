@@ -2,10 +2,10 @@ mod data_processing;
 use sprs::CsVec;
 
 fn main() {
-   let n = 100000;
+   let n = 840000;
    let w_c = 3;
-   let w_r = 4;
-   let crossover_proba = 0.02;
+   let w_r = 6;
+   let crossover_proba = 0.05;
    let seed =10;
    let mut original_code_word : Vec<usize> = vec![0;n];
    let sparse_vec = CsVec::new(n,vec![0;0], vec![1;0]);

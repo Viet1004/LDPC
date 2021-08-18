@@ -33,7 +33,6 @@ pub fn bsc_channel(n:usize ,code: &Vec<usize>, proba: f64) ->(CsVec<usize>, Vec<
     (CsVec::new(n,received,data),post_proba)
 }
 
-
 pub fn make_matrix_regular_ldpc(w_c: usize, w_r: usize, n: usize, seed: u8) -> CsMat<usize> {
     if (n * w_c) % w_r != 0 {
         panic!("number of col * weight of col must be divisible by weight of row");
@@ -106,7 +105,10 @@ pub fn message_passing(matrix: &mut CsMat<usize>,syndrome: CsVec<usize>,post_pro
         let code_word = vertical_run(&mut matrix_input, &post_proba, n, m);
         success = verification(matrix, &code_word, &syndrome);
         match success{
-            true => return Some(code_word),
+            true => {
+                println!("Number of iteration :{}",_i);
+                return Some(code_word)
+            }
             false => continue
         }
     }
