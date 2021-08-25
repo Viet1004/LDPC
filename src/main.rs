@@ -11,28 +11,36 @@ mod tests {
 
     use super::*;
 
-    use sprs::{CsMat, CsMatBase, CsMatView};
+    use sprs::{CsMat, CsMatBase, CsMatView, CsVec};
     use sprs::{CsVecBase, CsVecViewI};
     #[test]
     fn trysparse() {
         // Creating a sparse owned vector
         let owned = CsVec::new(10, vec![0, 4], vec![-4, 2]);
+        // owned = [-4,0,0,0,2,0,0,0,0,0,0];
+        // assert_eq!(owned.to_dense(), vec![-4, 0, 0, 0, 2, 0, 0, 0, 0, 0]); : to_dense => ArrayBase, ndarray.
         // Creating a sparse borrowing vector with `I = u16`
         let borrow = CsVecViewI::new(10, &[0_u16, 4], &[-4, 2]);
         // Creating a general sparse vector with different storage types
         let mixed = CsVecBase::new(10, &[0_u64, 4] as &[_], vec![-4, 2]);
-        println!("{:?} {:?} {:?}", owned, borrow, mixed);
+        println!("{:?} {:?} {:?}", owned.to_dense(), borrow.to_dense(), mixed.to_dense());
     }
 
     #[test]
     fn trysmat() {
         // This creates an owned matrix
         let owned_matrix = CsMat::new((2, 2), vec![0, 1, 1], vec![1], vec![4_u8]);
+        //[[0,4],[0,0]]
         // This creates a matrix which only borrows the elements
         let borrow_matrix = CsMatView::new((2, 2), &[0, 1, 1], &[1], &[4_u8]);
         // A combination of storage types may also be used for a
         // general sparse matrix
         let mixed_matrix = CsMatBase::new((2, 2), &[0, 1, 1] as &[_], vec![1_i64].into_boxed_slice(), vec![4_u8]);
+        println!("owned_matrix: {:?}", owned_matrix.to_dense());
+        // This creates an owned matrix
+        let owned_matrix = CsMat::new((3, 3), vec![0, 3, 4, 6], vec![0, 1, 2, 1, 1, 2], vec![11, 12, 13, 22, 32, 33]);
+        //[[11,12,13],[0,22,0],[0,32,33]]
+        println!("owned_matrix: {:?}", owned_matrix.to_dense());
     }
 
     #[test]
@@ -41,7 +49,6 @@ mod tests {
         //[[4,5],[1,3]
         let vec = CsVec::new(2, vec![0, 1], vec![-4, 2]);
         //[-4.2]
-
         assert_eq!(&matrix * &vec, CsVec::new(2, vec![0, 1], vec![-6, 2]));
         //rec: [-6,2]
         println!("res: {:?}", &matrix * &vec);
@@ -186,7 +193,7 @@ fn main() {
         }
     }
     //let nnz = indices.len();
-    //println!("codeword: {:?}", codeword);
+    println!("codeword: {:?}", codeword);
     //println!("codeword indices: {:?} nnz: {}", indices, nnz);
     //let sparse_vec = CsVec::new(n, indices, vec![1; nnz]);
     //println!("sparse vec : {:?}", sparse_vec);
@@ -204,7 +211,7 @@ fn main() {
     time0 = Instant::now();
     let mut matrix = data_processing::make_matrix_regular_ldpc(w_c, w_r, n, seed);
     time1 = Instant::now();
-    //println!("matrix: {:?}", matrix);
+    println!("matrix: {:?}", matrix);
     //println!("matrix {:?}", matrix.to_dense());
     println!("time to generate matrix: {:?}", time1.saturating_duration_since(time0));
     //println!("matrix indice: {:?}", matrix);
@@ -234,7 +241,7 @@ fn main() {
     let mut cnt_success = 0;
     for _ in 0..nbTest {
         time0 = Instant::now();
-        let (mut received, post_proba) = data_processing::bsc_channel(n, &codeword, crossover_proba);
+        let (mut received, mut post_proba) = data_processing::bsc_channel(n, &codeword, crossover_proba);
         //println!("recv: {:?}", received);
         let initial_errors: usize = received.iter().zip(codeword.iter()).map(|(&x, &y)| x ^ y).sum();
         println!("initial errors {}", initial_errors);
@@ -243,7 +250,7 @@ fn main() {
 
         time0 = Instant::now();
         let mut success: bool;
-        let res = data_processing::message_passing(&mut matrix, &syndrome2, post_proba, 60);
+        let res = data_processing::message_passing(&mut matrix, &syndrome2, &post_proba, 60);
         success = res.0;
         received = res.1;
         //println!("decode: {:?}", received);

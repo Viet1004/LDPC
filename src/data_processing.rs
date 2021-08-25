@@ -126,69 +126,141 @@ fn input_regular_ldpc(m: usize, n: usize, matrix: &CsMat<usize>, post_proba: &Ve
     CsMat::new((m, n), indptr_clone, indices, data)
 }
 
+// fn horizontal_run(matrix: &mut CsMat<f64>, syndrome: &[usize]) {
+//     let (m, _) = matrix.shape();
+//     let nnz = matrix.nnz();
+//     let mut indptr_clone: Vec<usize> = vec![0; m + 1];
+//     for index in 0..m {
+//         indptr_clone[index] = matrix.indptr().outer_inds_sz(index).start;
+//     }
+//     indptr_clone[m] = nnz;
+//     let data = matrix.data_mut();
+//     //    println!("Before horizontal run: {:?}", data);
+//     for index in 0..nnz {
+//         data[index] = (data[index] / 2.0).tanh();
+//     }
+//     for index in 0..m {
+//         let temp: f64 = data[indptr_clone[index]..indptr_clone[index + 1]].iter().product();
+//         for _i in indptr_clone[index]..indptr_clone[index + 1] {
+//             let mut temp1: f64 = 0.0;
+//             if syndrome[index] == 1 {
+//                 temp1 = -temp / data[_i];
+//             } else {
+//                 temp1 = temp / data[_i];
+//             }
+//             let temp2 = (1.0 + temp1) / (1.0 - temp1);
+//             data[_i] = temp2.ln();
+//         }
+//     }
+//     //    println!("After Horizontal run: {:?}", data);
+// }
+
 fn horizontal_run(matrix: &mut CsMat<f64>, syndrome: &[usize]) {
-    let (m, _) = matrix.shape();
-    let nnz = matrix.nnz();
-    let mut indptr_clone: Vec<usize> = vec![0; m + 1];
-    for index in 0..m {
-        indptr_clone[index] = matrix.indptr().outer_inds_sz(index).start;
-    }
-    indptr_clone[m] = nnz;
+    let (m, n) = matrix.shape();
+
+    let indptr = matrix.to_owned();
+    let indptr = indptr.indptr();
+    //let indices = matrix.indices();
+
     let data = matrix.data_mut();
-    //    println!("Before horizontal run: {:?}", data);
-    for index in 0..nnz {
-        data[index] = (data[index] / 2.0).tanh();
-    }
-    for index in 0..m {
-        let temp: f64 = data[indptr_clone[index]..indptr_clone[index + 1]].iter().product();
-        for _i in indptr_clone[index]..indptr_clone[index + 1] {
-            let mut temp1: f64 = 0.0;
-            if syndrome[index] == 1 {
-                temp1 = -temp / data[_i];
-            } else {
-                temp1 = temp / data[_i];
+
+    for i in 0..m {
+        //let r = indices[indptr[i]..indptr[i + 1]];
+        //println!("r: {:?}", indptr.outer_inds_sz(i));
+        let range = indptr.outer_inds_sz(i);
+        //let range = indptr[i]..indptr[i + 1];
+        //println!("range: {:?}", range);
+        let mut temp = 1.0;
+        for j in range {
+            if data[j] == 0.0 {
+                data[j] = 10_f64.powi(-5);
+                println!("avoid 0 to 10-5");
+            }
+            temp *= (data[j] / 2.0).tanh();
+        }
+        temp *= (-1_f64).powi(syndrome[i] as i32);
+        let range = indptr.outer_inds_sz(i);
+        for j in range {
+            let mut temp1 = temp / data[j];
+            if temp1 == -1.0 {
+                temp1 = temp1 + 10_f64.powi(-10);
+            } else if temp1 == 1.0 {
+                temp1 = temp1 - 10_f64.powi(-10);
             }
             let temp2 = (1.0 + temp1) / (1.0 - temp1);
-            data[_i] = temp2.ln();
+            data[j] = temp2.ln();
+            if data[j].is_nan() {
+                println!("nan: {:?} {:?} {:?} {:?} {:?} {:?}", i, j, temp, temp1, temp2, data[j]);
+            }
         }
     }
-    //    println!("After Horizontal run: {:?}", data);
 }
 
-fn vertical_run(matrix: &mut CsMat<f64>, post_proba: &Vec<f64>, n: usize, m: usize) -> Vec<usize> {
-    let mut indices = Vec::new();
+// fn vertical_run(matrix: &mut CsMat<f64>, post_proba: &Vec<f64>, n: usize, m: usize) -> Vec<usize> {
+//     let mut indices = Vec::new();
 
-    let mut matrix_temp = matrix.to_csc();
-    let nnz = matrix.nnz();
-    let mut indptr_clone: Vec<usize> = vec![0; n + 1];
-    for index in 0..n {
-        indptr_clone[index] = matrix_temp.indptr().outer_inds_sz(index).start;
-    }
-    indptr_clone[n] = nnz;
-    let data = matrix_temp.data_mut();
-    //    println!("Data before vertical run: {:?}", data);
-    for index in 0..n {
-        let mut temp: f64 = data[indptr_clone[index]..indptr_clone[index + 1]].iter().sum();
-        temp += post_proba[index];
-        for _i in indptr_clone[index]..indptr_clone[index + 1] {
-            data[_i] = temp - data[_i]
+//     let mut matrix_temp = matrix.to_csc();
+//     println!("vert: {:?}", matrix_temp);
+//     let nnz = matrix.nnz();
+//     let mut indptr_clone: Vec<usize> = vec![0; n + 1];
+//     for index in 0..n {
+//         indptr_clone[index] = matrix_temp.indptr().outer_inds_sz(index).start;
+//     }
+//     indptr_clone[n] = nnz;
+//     let data = matrix_temp.data_mut();
+//     //    println!("Data before vertical run: {:?}", data);
+//     for index in 0..n {
+//         let mut temp: f64 = data[indptr_clone[index]..indptr_clone[index + 1]].iter().sum();
+//         println!("temp on {:?}", &indptr_clone[index]..&indptr_clone[index + 1]);
+//         temp += post_proba[index];
+//         for _i in indptr_clone[index]..indptr_clone[index + 1] {
+//             data[_i] = temp - data[_i]
+//         }
+//         if temp <= 0.0 {
+//             indices.push(index);
+//         }
+//     }
+//     //let data_vec = vec![1; indices.len()];
+//     let matrix_temp = matrix_temp.to_csr();
+//     let data = matrix.data_mut();
+//     for datum_ind in 0..nnz {
+//         data[datum_ind] = matrix_temp.data()[datum_ind];
+//     }
+//     //    println!("data after vertical run:{:?}", data);
+//     //CsVec::new(n, indices, data_vec)
+//     let mut recv = vec![0; n];
+//     for i in 0..indices.len() {
+//         recv[indices[i]] = 1;
+//     }
+//     recv
+// }
+
+fn vertical_run(matrix: &mut CsMat<f64>, post_proba: &[f64]) -> Vec<usize> {
+    let mut matrix_t = matrix.to_csc();
+    let (m, n) = matrix_t.shape();
+    //println!("vert mat: {} {} {:?}", m, n, matrix_t);
+    let indptr = matrix_t.to_owned();
+    let indptr = indptr.indptr();
+    let data = matrix_t.data_mut();
+
+    let mut recv = vec![0; n];
+
+    for i in 0..n {
+        let range = indptr.outer_inds_sz(i);
+        //let mut temp: f64 = data[indptr_clone[index]..indptr_clone[index + 1]].iter().sum();
+        let mut temp: f64 = data[range.into_iter()].iter().sum();
+        temp += post_proba[i];
+        let range = indptr.outer_inds_sz(i);
+        // for _i in indptr_clone[index]..indptr_clone[index + 1] {
+        for j in range {
+            data[j] = temp - data[j];
         }
         if temp <= 0.0 {
-            indices.push(index);
+            //     indices.push(index);
+            recv[i] = 1;
         }
     }
-    //let data_vec = vec![1; indices.len()];
-    let matrix_temp = matrix_temp.to_csr();
-    let data = matrix.data_mut();
-    for datum_ind in 0..nnz {
-        data[datum_ind] = matrix_temp.data()[datum_ind];
-    }
-    //    println!("data after vertical run:{:?}", data);
-    //CsVec::new(n, indices, data_vec)
-    let mut recv = vec![0; n];
-    for i in 0..indices.len() {
-        recv[indices[i]] = 1;
-    }
+    *matrix = matrix_t.to_csr();
     recv
 }
 
@@ -203,7 +275,7 @@ fn verification(matrix0: &CsMat<usize>, received_vec: &Vec<usize>, syndrome: &[u
     &csmat_dot(matrix0, received_vec) == syndrome
 }
 
-pub fn message_passing(matrix: &mut CsMat<usize>, syndrome: &[usize], post_proba: Vec<f64>, number_of_iter: usize) -> (bool, Vec<usize>) {
+pub fn message_passing(matrix: &mut CsMat<usize>, syndrome: &[usize], post_proba: &Vec<f64>, number_of_iter: usize) -> (bool, Vec<usize>) {
     let (m, n) = matrix.shape();
     let mut success = false;
     let mut matrix_input = input_regular_ldpc(m, n, matrix, &post_proba);
@@ -212,10 +284,15 @@ pub fn message_passing(matrix: &mut CsMat<usize>, syndrome: &[usize], post_proba
     //     syndrome_vec[*i] = 1;
     //     println!("i is {}", *i);
     // }
+    let post_proba: Vec<f64> = post_proba.iter().map(|&x| x.ln()).collect();
+    println!("data input : {:?}", matrix_input);
     let mut received_vec = vec![0; n];
     for i in 0..number_of_iter {
         horizontal_run(&mut matrix_input, &syndrome);
-        received_vec = vertical_run(&mut matrix_input, &post_proba, n, m);
+        //println!("horizontal {}: {:?}", i, matrix_input);
+        received_vec = vertical_run(&mut matrix_input, &post_proba);
+        //println!("vertical: {} {:?}", i, matrix_input);
+        println!("recv: {:?}", received_vec);
         success = verification(matrix, &received_vec, &syndrome);
         match success {
             true => {
