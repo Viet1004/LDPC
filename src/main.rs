@@ -193,7 +193,7 @@ fn main() {
         }
     }
     //let nnz = indices.len();
-    println!("codeword: {:?}", codeword);
+    //println!("codeword: {:?}", codeword);
     //println!("codeword indices: {:?} nnz: {}", indices, nnz);
     //let sparse_vec = CsVec::new(n, indices, vec![1; nnz]);
     //println!("sparse vec : {:?}", sparse_vec);
@@ -211,7 +211,7 @@ fn main() {
     time0 = Instant::now();
     let mut matrix = data_processing::make_matrix_regular_ldpc(w_c, w_r, n, seed);
     time1 = Instant::now();
-    println!("matrix: {:?}", matrix);
+    //println!("matrix: {:?}", matrix);
     //println!("matrix {:?}", matrix.to_dense());
     println!("time to generate matrix: {:?}", time1.saturating_duration_since(time0));
     //println!("matrix indice: {:?}", matrix);

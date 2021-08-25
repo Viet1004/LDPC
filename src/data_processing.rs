@@ -69,11 +69,12 @@ pub fn bsc_channel(n: usize, codeword: &Vec<usize>, proba: f64) -> (Vec<usize>, 
             received[i] ^= 1;
         }
     }
-    let post_proba = received.iter().map(|&x| if x == 1 { proba } else { 1.0 - proba }).collect();
+    let post_proba: Vec<f64> = received.iter().map(|&x| if x == 1 { proba } else { 1.0 - proba }).collect();
+    let post_proba2: Vec<f64> = post_proba.iter().map(|&x| (x / (1.0 - x)).ln()).collect();
 
     //let data = vec![1; received.len()];
     //(CsVec::new(n, received, data), post_proba)
-    (received, post_proba)
+    (received, post_proba2)
 }
 
 pub fn make_matrix_regular_ldpc(w_c: usize, w_r: usize, n: usize, seed: u8) -> CsMat<usize> {
@@ -104,7 +105,7 @@ pub fn make_matrix_regular_ldpc(w_c: usize, w_r: usize, n: usize, seed: u8) -> C
     CsMat::new((num_row, n), indptr, indices, data)
 }
 
-fn input_regular_ldpc(m: usize, n: usize, matrix: &CsMat<usize>, post_proba: &Vec<f64>) -> CsMat<f64> {
+fn input_regular_ldpc(m: usize, n: usize, matrix: &CsMat<usize>, post_proba: &[f64]) -> CsMat<f64> {
     //    let (indptr, indices, _) = matrix.into_raw_storage();
     let nnz = matrix.nnz();
     let mut indptr_clone: Vec<usize> = vec![0; m + 1]; // Need to check it if there is a logic error
@@ -118,9 +119,10 @@ fn input_regular_ldpc(m: usize, n: usize, matrix: &CsMat<usize>, post_proba: &Ve
         indices.push(*index);
     }
     let mut data = Vec::new();
-    for _i in matrix.indices().iter() {
-        let temp = post_proba[*_i] / (1.0 - post_proba[*_i]);
-        data.push(temp.ln());
+    for &i in matrix.indices() {
+        //let temp = post_proba[*_i] / (1.0 - post_proba[*_i]);
+        //data.push(temp.ln());
+        data.push(post_proba[i]);
     }
     //    println!("indptr_clone{:?}", indptr_clone);
     CsMat::new((m, n), indptr_clone, indices, data)
@@ -158,11 +160,20 @@ fn input_regular_ldpc(m: usize, n: usize, matrix: &CsMat<usize>, post_proba: &Ve
 fn horizontal_run(matrix: &mut CsMat<f64>, syndrome: &[usize]) {
     let (m, n) = matrix.shape();
 
+    let nnz = matrix.nnz();
+
     let indptr = matrix.to_owned();
     let indptr = indptr.indptr();
     //let indices = matrix.indices();
 
     let data = matrix.data_mut();
+    for i in 0..nnz {
+        data[i] = (data[i] / 2.0).tanh();
+        if data[i] == 0.0 {
+            data[i] = 10_f64.powi(-5);
+            println!("avoid 0 to 10-5");
+        }
+    }
 
     for i in 0..m {
         //let r = indices[indptr[i]..indptr[i + 1]];
@@ -172,11 +183,11 @@ fn horizontal_run(matrix: &mut CsMat<f64>, syndrome: &[usize]) {
         //println!("range: {:?}", range);
         let mut temp = 1.0;
         for j in range {
-            if data[j] == 0.0 {
-                data[j] = 10_f64.powi(-5);
-                println!("avoid 0 to 10-5");
-            }
-            temp *= (data[j] / 2.0).tanh();
+            // if data[j] == 0.0 {
+            //     data[j] = 10_f64.powi(-5);
+            //     println!("avoid 0 to 10-5");
+            // }
+            temp *= data[j];
         }
         temp *= (-1_f64).powi(syndrome[i] as i32);
         let range = indptr.outer_inds_sz(i);
@@ -284,15 +295,15 @@ pub fn message_passing(matrix: &mut CsMat<usize>, syndrome: &[usize], post_proba
     //     syndrome_vec[*i] = 1;
     //     println!("i is {}", *i);
     // }
-    let post_proba: Vec<f64> = post_proba.iter().map(|&x| x.ln()).collect();
-    println!("data input : {:?}", matrix_input);
+    //let post_proba: Vec<f64> = post_proba.iter().map(|&x| (x / (1.0 - x)).ln()).collect();
+    //println!("data input : {:?}", matrix_input);
     let mut received_vec = vec![0; n];
     for i in 0..number_of_iter {
         horizontal_run(&mut matrix_input, &syndrome);
         //println!("horizontal {}: {:?}", i, matrix_input);
         received_vec = vertical_run(&mut matrix_input, &post_proba);
         //println!("vertical: {} {:?}", i, matrix_input);
-        println!("recv: {:?}", received_vec);
+        //println!("recv: {:?}", received_vec);
         success = verification(matrix, &received_vec, &syndrome);
         match success {
             true => {
